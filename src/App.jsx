@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import io from 'socket.io-client';
 import Peer from 'simple-peer';
-import { Mic, MicOff, Monitor, MonitorOff, Send, LogOut, Paperclip, Image as ImageIcon, Volume2, VolumeX, Headphones, HeadphonesOff } from 'lucide-react';
+import { Mic, MicOff, Monitor, MonitorOff, Send, LogOut, Paperclip, Image as ImageIcon, Volume2, VolumeX, Headphones } from 'lucide-react';
 import classNames from 'classnames';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -401,7 +401,7 @@ function App() {
               {/* Deafen Toggle */}
               <div className="flex flex-col items-center gap-1">
                   <button onClick={toggleDeafen} className={classNames("p-4 rounded-full transition-all duration-300 border", deafened ? "bg-red-500/10 border-red-500 text-red-500" : "bg-gray-800 border-gray-700 text-white hover:border-gamer-cyan hover:shadow-neon")}>
-                      {deafened ? <HeadphonesOff size={24} /> : <Headphones size={24} />}
+                      {deafened ? <VolumeX size={24} /> : <Headphones size={24} />}
                   </button>
                   <span className="text-[10px] text-gray-500 font-gamer">SOUND (Ctrl+Q)</span>
               </div>
