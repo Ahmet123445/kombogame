@@ -5,39 +5,70 @@ import { Mic, MicOff, Monitor, MonitorOff, Send, LogOut, Paperclip, Image as Ima
 import classNames from 'classnames';
 import { v4 as uuidv4 } from 'uuid';
 
-// --- STUN SERVERS (BAĞLANTI İÇİN KRİTİK) ---
+// --- STUN & TURN SERVERS (BAĞLANTI İÇİN KRİTİK) ---
+// OpenRelay Project (Ücretsiz TURN) sayesinde farklı ağlar birbirini %99 duyar.
 const ICE_SERVERS = [
   { urls: 'stun:stun.l.google.com:19302' },
-  { urls: 'stun:global.stun.twilio.com:3478' }
+  { urls: 'stun:global.stun.twilio.com:3478' },
+  { 
+    urls: 'turn:openrelay.metered.ca:80', 
+    username: 'openrelayproject', 
+    credential: 'openrelayproject' 
+  },
+  { 
+    urls: 'turn:openrelay.metered.ca:443', 
+    username: 'openrelayproject', 
+    credential: 'openrelayproject' 
+  },
+  { 
+    urls: 'turn:openrelay.metered.ca:443?transport=tcp', 
+    username: 'openrelayproject', 
+    credential: 'openrelayproject' 
+  }
 ];
 
 // --- Components ---
 
 const UserCard = ({ peer, username, isMuted, isScreenSharing }) => {
-  const videoRef = useRef();
+  const videoRef = useRef(); // Sadece video/ekran için
+  const audioRef = useRef(); // Sadece ses için
   const [volume, setVolume] = useState(1);
   const [hasVideo, setHasVideo] = useState(false);
 
   useEffect(() => {
-    // Stream geldiğinde
     peer.on("stream", stream => {
+      // 1. SESİ AYRI İŞLE (Garanti Duyulması İçin)
+      if (audioRef.current) {
+        audioRef.current.srcObject = stream;
+        // Tarayıcı politikasını aşmak için oynatmayı dene
+        audioRef.current.play().catch(e => console.log("Audio autoplay blocked:", e));
+      }
+
+      // 2. VİDEOYU AYRI İŞLE
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
-        setHasVideo(stream.getVideoTracks().length > 0);
       }
       
-      // Track değişikliklerini dinle (Ekran paylaşımı aç/kapa için)
-      stream.onaddtrack = () => setHasVideo(stream.getVideoTracks().length > 0);
-      stream.onremovetrack = () => setHasVideo(stream.getVideoTracks().length > 0);
+      // Video track kontrolü
+      const checkVideo = () => setHasVideo(stream.getVideoTracks().length > 0 && stream.getVideoTracks()[0].enabled);
+      
+      checkVideo();
+      stream.onaddtrack = checkVideo;
+      stream.onremovetrack = checkVideo;
+      
+      // Video track enable/disable durumunu da dinle
+      stream.getVideoTracks().forEach(track => {
+          track.onmute = () => setHasVideo(false);
+          track.onunmute = () => setHasVideo(true);
+          track.onended = () => setHasVideo(false);
+      });
     });
   }, [peer]);
 
   const handleVolumeChange = (e) => {
       const newVol = parseFloat(e.target.value);
       setVolume(newVol);
-      if(videoRef.current) {
-          videoRef.current.volume = newVol;
-      }
+      if(audioRef.current) audioRef.current.volume = newVol; // Sesi audio elementinden kıs
   };
 
   return (
@@ -48,10 +79,15 @@ const UserCard = ({ peer, username, isMuted, isScreenSharing }) => {
       "aspect-[3/2]": !hasVideo
     })}>
       
+      {/* GİZLİ SES OYNATICI (Görünmez ama DOM'da var, display:none değil!) */}
+      <audio ref={audioRef} autoPlay playsInline style={{ opacity: 0, position: 'absolute', pointerEvents: 'none' }} />
+
+      {/* VİDEO OYNATICI (Ekran Paylaşımı İçin) */}
       <video 
         ref={videoRef} 
         playsInline 
         autoPlay 
+        muted={true} // Ses audioRef'ten gelecek, videoyu mute yapıyoruz ki yankı olmasın
         className={classNames("w-full h-full object-cover bg-black", { "hidden": !hasVideo })} 
       />
 
@@ -93,7 +129,6 @@ function App() {
   const [roomId, setRoomId] = useState("Lobi");
   
   const [peers, setPeers] = useState([]);
-  const [stream, setStream] = useState();
   const [messages, setMessages] = useState([]);
   
   const [messageInput, setMessageInput] = useState("");
@@ -104,9 +139,9 @@ function App() {
   const [screenSharing, setScreenSharing] = useState(false);
   
   const socketRef = useRef();
-  const userAudioRef = useRef();
-  const peersRef = useRef([]); // Peer objelerini tutar
-  const streamRef = useRef(); // Güncel stream referansı
+  const userVideoRef = useRef(); // Kendi ekranımız/videomuz
+  const peersRef = useRef([]); 
+  const streamRef = useRef(); // Aktif Stream (Ses + Opsiyonel Video)
 
   // --- Keybinds ---
   useEffect(() => {
@@ -134,11 +169,8 @@ function App() {
     // Render.com Sunucu Adresi
     socketRef.current = io('https://kombogame-server.onrender.com');
 
-    navigator.mediaDevices.getUserMedia({ video: false, audio: true }).then(currentStream => {
-        setStream(currentStream);
-        streamRef.current = currentStream;
-        
-        if(userAudioRef.current) userAudioRef.current.srcObject = currentStream;
+    navigator.mediaDevices.getUserMedia({ video: false, audio: true }).then(audioStream => {
+        streamRef.current = audioStream;
 
         socketRef.current.emit("join-room", { roomId, username });
 
@@ -149,7 +181,7 @@ function App() {
         socketRef.current.on("all-users", users => {
             const peersArray = [];
             users.forEach(user => {
-                const peer = createPeer(user.id, socketRef.current.id, currentStream, user.username);
+                const peer = createPeer(user.id, socketRef.current.id, streamRef.current, user.username);
                 peersRef.current.push({ peerID: user.id, peer, username: user.username });
                 peersArray.push({ peerID: user.id, peer, username: user.username });
             });
@@ -157,7 +189,7 @@ function App() {
         });
 
         socketRef.current.on("user-joined", payload => {
-            const peer = addPeer(payload.signal, payload.callerId, currentStream, payload.username);
+            const peer = addPeer(payload.signal, payload.callerId, streamRef.current, payload.username);
             peersRef.current.push({ peerID: payload.callerId, peer, username: payload.username });
             setPeers(users => [...users, { peerID: payload.callerId, peer, username: payload.username }]);
         });
@@ -192,7 +224,7 @@ function App() {
           initiator: true, 
           trickle: false, 
           stream,
-          config: { iceServers: ICE_SERVERS } // STUN SERVER EKLENDİ
+          config: { iceServers: ICE_SERVERS } 
       });
       peer.on("signal", signal => {
           socketRef.current.emit("sending-signal", { userToSignal, callerId, signal, username });
@@ -205,7 +237,7 @@ function App() {
           initiator: false, 
           trickle: false, 
           stream,
-          config: { iceServers: ICE_SERVERS } // STUN SERVER EKLENDİ
+          config: { iceServers: ICE_SERVERS }
       });
       peer.on("signal", signal => {
           socketRef.current.emit("returning-signal", { signal, callerId });
@@ -249,7 +281,7 @@ function App() {
       if (audioTrack) {
           const newMuteState = !muted;
           setMuted(newMuteState);
-          audioTrack.enabled = !newMuteState; // Toggle track
+          audioTrack.enabled = !newMuteState; 
           socketRef.current.emit("toggle-audio", { roomId, isMuted: newMuteState });
       }
   }
@@ -258,9 +290,9 @@ function App() {
       const newDeafenState = !deafened;
       setDeafened(newDeafenState);
       
-      const mediaElements = document.querySelectorAll('video, audio');
+      const mediaElements = document.querySelectorAll('audio, video');
       mediaElements.forEach(el => {
-          if(el !== userAudioRef.current) {
+          if(el !== userVideoRef.current) { // Kendi önizlememiz hariç
              el.muted = newDeafenState;
           }
       });
@@ -268,58 +300,70 @@ function App() {
 
   const toggleScreenShare = () => {
     if (screenSharing) {
-        // Ekran Paylaşımını DURDUR
-        // Sadece ses moduna geri dön
+        // --- PAYLAŞIMI DURDUR ---
+        // 1. Ekran track'ini durdur
+        const screenTrack = streamRef.current.getVideoTracks()[0];
+        if (screenTrack) screenTrack.stop();
+
+        // 2. Sadece ses olan temiz bir stream oluştur
         navigator.mediaDevices.getUserMedia({ audio: true, video: false }).then(audioStream => {
-             const audioTrack = audioStream.getAudioTracks()[0];
-             
-             // Peer'lardaki video track'i kaldır ve ses track'ini güncelle
-             peersRef.current.forEach(p => {
-                 const senders = p.peer._pc.getSenders();
-                 const videoSender = senders.find(s => s.track && s.track.kind === 'video');
-                 if(videoSender) {
-                     // Video track'i kaldır
+            const audioTrack = audioStream.getAudioTracks()[0];
+            
+            // Eğer mute idiysek yeni track'i de mute yap
+            audioTrack.enabled = !muted;
+
+            // 3. Peer'lardaki trackleri değiştir (Video kaldır, Ses güncelle)
+            peersRef.current.forEach(p => {
+                const senders = p.peer._pc.getSenders();
+                
+                // Video sender'ı bul ve sil
+                const videoSender = senders.find(s => s.track && s.track.kind === 'video');
+                if(videoSender) {
                      p.peer.removeTrack(videoSender, streamRef.current);
-                 }
-                 const audioSender = senders.find(s => s.track && s.track.kind === 'audio');
-                 if(audioSender) {
-                     // Ses trackini değiştir (bazen gerekmez ama garanti olsun)
-                     audioSender.replaceTrack(audioTrack);
-                 }
-             });
-             
-             // State güncelle
-             setStream(audioStream);
-             streamRef.current = audioStream;
-             setScreenSharing(false);
-             
-             // Ekran paylaşımı streamini durdur
-             screenTrackRef.current?.stop();
+                }
+
+                // Ses sender'ını bul ve track'i değiştir
+                const audioSender = senders.find(s => s.track && s.track.kind === 'audio');
+                if(audioSender) {
+                    audioSender.replaceTrack(audioTrack);
+                }
+            });
+
+            // 4. State güncelle
+            streamRef.current = audioStream;
+            setScreenSharing(false);
+            if(userVideoRef.current) userVideoRef.current.srcObject = null;
         });
 
     } else {
-        // Ekran Paylaşımını BAŞLAT
+        // --- PAYLAŞIMI BAŞLAT ---
         navigator.mediaDevices.getDisplayMedia({ cursor: true }).then(displayStream => {
             const screenTrack = displayStream.getVideoTracks()[0];
-            const audioTrack = streamRef.current.getAudioTracks()[0];
-            screenTrackRef.current = screenTrack;
             
-            // Yeni bir stream oluştur (Ses + Ekran)
+            // Mevcut ses trackini al
+            const audioTrack = streamRef.current.getAudioTracks()[0];
+            
+            // Yeni Birleşik Stream (Ses + Ekran)
             const newStream = new MediaStream([screenTrack, audioTrack]);
-
+            
+            // Peer'lara ekranı ekle
             peersRef.current.forEach(p => {
-                 // Video track'i ekle
                  p.peer.addTrack(screenTrack, newStream);
+                 // Not: Simple-peer addTrack ile stream'i günceller
             });
 
-            // Local view update
-            setStream(newStream);
+            // Local State Güncelle
             streamRef.current = newStream;
             setScreenSharing(true);
-            if(userAudioRef.current) userAudioRef.current.srcObject = newStream;
+            
+            // Kendi önizlememize yansıt
+            if(userVideoRef.current) {
+                userVideoRef.current.srcObject = newStream;
+            }
 
+            // Ekran paylaşımı tarayıcıdan durdurulursa
             screenTrack.onended = () => {
-                 toggleScreenShare(); // Kullanıcı tarayıcı UI'sından durdurursa
+                 toggleScreenShare(); 
             };
         });
     }
@@ -376,8 +420,12 @@ function App() {
           </div>
 
           <div className="flex-1 p-4 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 overflow-y-auto content-start pt-16">
+              
+              {/* LOCAL USER KART (Sadece Ekran Paylaşımı Varsa Video Gösterir) */}
               <div className={classNames("relative bg-gamer-panel rounded-lg overflow-hidden border border-gamer-cyan shadow-neon aspect-[3/2] flex flex-col", { "col-span-2 row-span-2 aspect-video": screenSharing })}>
-                  <video ref={userAudioRef} muted autoPlay playsInline className={classNames("w-full h-full object-cover", screenSharing ? "block" : "hidden")} />
+                  
+                  {/* Local Video/Ekran */}
+                  <video ref={userVideoRef} muted autoPlay playsInline className={classNames("w-full h-full object-cover", screenSharing ? "block" : "hidden")} />
                   
                   {!screenSharing && (
                       <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-gray-900 to-black">
