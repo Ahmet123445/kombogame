@@ -5,21 +5,28 @@ import { Mic, MicOff, Monitor, MonitorOff, Send, LogOut, Paperclip, Image as Ima
 import classNames from 'classnames';
 import { v4 as uuidv4 } from 'uuid';
 
+// --- STUN SERVERS (BAĞLANTI İÇİN KRİTİK) ---
+const ICE_SERVERS = [
+  { urls: 'stun:stun.l.google.com:19302' },
+  { urls: 'stun:global.stun.twilio.com:3478' }
+];
+
 // --- Components ---
 
-// User Audio Card (Ses ve Ekran Paylaşımı İçin)
 const UserCard = ({ peer, username, isMuted, isScreenSharing }) => {
-  const videoRef = useRef(); // Ses ve Video için tek ref kullanılır (Stream objesi)
+  const videoRef = useRef();
   const [volume, setVolume] = useState(1);
   const [hasVideo, setHasVideo] = useState(false);
 
   useEffect(() => {
+    // Stream geldiğinde
     peer.on("stream", stream => {
-      videoRef.current.srcObject = stream;
-      // Stream içinde video track var mı kontrol et (Ekran paylaşımı için)
-      setHasVideo(stream.getVideoTracks().length > 0);
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        setHasVideo(stream.getVideoTracks().length > 0);
+      }
       
-      // Track eklenirse/çıkarılırsa (ekran paylaşımı aç/kapa) güncelle
+      // Track değişikliklerini dinle (Ekran paylaşımı aç/kapa için)
       stream.onaddtrack = () => setHasVideo(stream.getVideoTracks().length > 0);
       stream.onremovetrack = () => setHasVideo(stream.getVideoTracks().length > 0);
     });
@@ -35,13 +42,12 @@ const UserCard = ({ peer, username, isMuted, isScreenSharing }) => {
 
   return (
     <div className={classNames("relative bg-gamer-panel rounded-lg overflow-hidden border transition-all duration-300 group flex flex-col shadow-lg", {
-      "border-gamer-cyan shadow-neon": !isMuted, // Konuşuyorsa neon
+      "border-gamer-cyan shadow-neon": !isMuted,
       "border-gray-800": isMuted,
-      "col-span-2 row-span-2 aspect-video": hasVideo, // Ekran paylaşımı varsa büyük göster
-      "aspect-[3/2]": !hasVideo // Sadece ses ise kart şeklinde
+      "col-span-2 row-span-2 aspect-video": hasVideo,
+      "aspect-[3/2]": !hasVideo
     })}>
       
-      {/* Medya Elementi (Ses veya Video) */}
       <video 
         ref={videoRef} 
         playsInline 
@@ -49,7 +55,6 @@ const UserCard = ({ peer, username, isMuted, isScreenSharing }) => {
         className={classNames("w-full h-full object-cover bg-black", { "hidden": !hasVideo })} 
       />
 
-      {/* Ses Only Görünümü (Avatar) */}
       {!hasVideo && (
           <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-gray-900 to-black">
               <div className={classNames("w-20 h-20 rounded-full flex items-center justify-center border-2 transition-all duration-500", !isMuted ? "border-gamer-cyan shadow-[0_0_30px_cyan] bg-gamer-cyan/20" : "border-gray-700 bg-gray-800")}>
@@ -58,14 +63,12 @@ const UserCard = ({ peer, username, isMuted, isScreenSharing }) => {
           </div>
       )}
 
-      {/* Overlay Bilgileri */}
-      <div className="absolute bottom-0 left-0 right-0 bg-black/80 p-2 flex items-center justify-between backdrop-blur-sm">
+      <div className="absolute bottom-0 left-0 right-0 bg-black/80 p-2 flex items-center justify-between backdrop-blur-sm z-10">
         <div className="flex items-center gap-2 overflow-hidden">
             <span className="text-white font-gamer text-xs tracking-wider truncate max-w-[100px]">{username}</span>
             {isMuted && <MicOff size={12} className="text-red-500 shrink-0" />}
         </div>
         
-        {/* Bireysel Ses Ayarı */}
         <div className="flex items-center gap-2 group/vol">
             <Volume2 size={14} className="text-gray-400 group-hover/vol:text-gamer-cyan" />
             <input 
@@ -89,46 +92,39 @@ function App() {
   const [username, setUsername] = useState("");
   const [roomId, setRoomId] = useState("Lobi");
   
-  // Core
   const [peers, setPeers] = useState([]);
   const [stream, setStream] = useState();
   const [messages, setMessages] = useState([]);
   
-  // Chat Inputs
   const [messageInput, setMessageInput] = useState("");
   const fileInputRef = useRef();
 
-  // Controls
-  const [muted, setMuted] = useState(false); // Mic Mute
-  const [deafened, setDeafened] = useState(false); // Speaker Mute
+  const [muted, setMuted] = useState(false);
+  const [deafened, setDeafened] = useState(false);
   const [screenSharing, setScreenSharing] = useState(false);
   
   const socketRef = useRef();
-  const userAudioRef = useRef(); // Kendi sesimiz (genelde kapalı olur echo olmasın diye)
-  const peersRef = useRef([]);
-  const screenTrackRef = useRef();
+  const userAudioRef = useRef();
+  const peersRef = useRef([]); // Peer objelerini tutar
+  const streamRef = useRef(); // Güncel stream referansı
 
   // --- Keybinds ---
   useEffect(() => {
     const handleKeyDown = (e) => {
-        // Input içindeyken kısayolları devre dışı bırak
         if(e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
 
-        // Ctrl + M: Toggle Mic
         if((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'm') {
             e.preventDefault();
             toggleMute();
         }
-        // Ctrl + Q: Toggle Deafen (Hoparlör Kapatma)
         if((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'q') {
              e.preventDefault();
              toggleDeafen();
         }
     };
-
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [muted, deafened, stream]); // Dependencies important for toggle functions
+  }, [muted, deafened]);
 
 
   // --- Socket & WebRTC Logic ---
@@ -138,16 +134,14 @@ function App() {
     // Render.com Sunucu Adresi
     socketRef.current = io('https://kombogame-server.onrender.com');
 
-    // Sadece SES al (Video: false)
     navigator.mediaDevices.getUserMedia({ video: false, audio: true }).then(currentStream => {
         setStream(currentStream);
+        streamRef.current = currentStream;
         
-        // Kendi sesimizi duymayalım ama stream aktif kalsın
         if(userAudioRef.current) userAudioRef.current.srcObject = currentStream;
 
         socketRef.current.emit("join-room", { roomId, username });
 
-        // Geçmiş Mesajlar
         socketRef.current.on("message-history", (history) => {
             setMessages(history);
         });
@@ -189,12 +183,17 @@ function App() {
 
     }).catch(err => {
         console.error("Error accessing media devices:", err);
-        alert("Mikrofon erişimi sağlanamadı.");
+        alert("Mikrofon erişimi sağlanamadı. Tarayıcı izinlerini kontrol edin.");
     });
   };
 
   function createPeer(userToSignal, callerId, stream, remoteUsername) {
-      const peer = new Peer({ initiator: true, trickle: false, stream });
+      const peer = new Peer({ 
+          initiator: true, 
+          trickle: false, 
+          stream,
+          config: { iceServers: ICE_SERVERS } // STUN SERVER EKLENDİ
+      });
       peer.on("signal", signal => {
           socketRef.current.emit("sending-signal", { userToSignal, callerId, signal, username });
       });
@@ -202,15 +201,18 @@ function App() {
   }
 
   function addPeer(incomingSignal, callerId, stream, remoteUsername) {
-      const peer = new Peer({ initiator: false, trickle: false, stream });
+      const peer = new Peer({ 
+          initiator: false, 
+          trickle: false, 
+          stream,
+          config: { iceServers: ICE_SERVERS } // STUN SERVER EKLENDİ
+      });
       peer.on("signal", signal => {
           socketRef.current.emit("returning-signal", { signal, callerId });
       });
       peer.signal(incomingSignal);
       return peer;
   }
-
-  // --- Actions ---
 
   const sendMessage = (e) => {
       e.preventDefault();
@@ -227,40 +229,37 @@ function App() {
       reader.onload = () => {
           const base64 = reader.result;
           const type = file.type.startsWith('image/') ? 'image' : 'file';
-          
           socketRef.current.emit("send-message", { 
               roomId, 
-              message: file.name, // Mesaj metni olarak dosya adı
+              message: file.name, 
               fileData: base64,
               type: type,
               username 
           });
       };
       reader.readAsDataURL(file);
-      e.target.value = null; // Reset input
+      e.target.value = null; 
   };
 
   const toggleMute = () => {
-      if(!stream) return;
-      const newMuteState = !muted;
-      setMuted(newMuteState);
-      stream.getAudioTracks()[0].enabled = !newMuteState;
-      socketRef.current.emit("toggle-audio", { roomId, isMuted: newMuteState });
+      const currentStream = streamRef.current;
+      if(!currentStream) return;
+      
+      const audioTrack = currentStream.getAudioTracks()[0];
+      if (audioTrack) {
+          const newMuteState = !muted;
+          setMuted(newMuteState);
+          audioTrack.enabled = !newMuteState; // Toggle track
+          socketRef.current.emit("toggle-audio", { roomId, isMuted: newMuteState });
+      }
   }
 
   const toggleDeafen = () => {
-      // Tüm HTML video/audio elementlerinin sesini kapat
-      // React state ile kontrol edilen UserCard bileşenlerine prop olarak gitmez,
-      // çünkü DOM elementlerini doğrudan manipüle etmiyoruz.
-      // Ancak "global" bir deafen state'i UI'da gösterebiliriz.
-      // Gerçek "sağırlaştırma" için DOM'daki tüm <video> ve <audio> taglerini bulup mute yapacağız.
-      
       const newDeafenState = !deafened;
       setDeafened(newDeafenState);
       
       const mediaElements = document.querySelectorAll('video, audio');
       mediaElements.forEach(el => {
-          // Kendi sesimiz hariç (zaten muted)
           if(el !== userAudioRef.current) {
              el.muted = newDeafenState;
           }
@@ -269,41 +268,58 @@ function App() {
 
   const toggleScreenShare = () => {
     if (screenSharing) {
-        screenTrackRef.current.stop();
-        // Sese geri dön
+        // Ekran Paylaşımını DURDUR
+        // Sadece ses moduna geri dön
         navigator.mediaDevices.getUserMedia({ audio: true, video: false }).then(audioStream => {
-             // Tekrar sadece ses moduna geçiş karmaşık olabilir çünkü track replace ediyoruz.
-             // Basit çözüm: Track'i kaldırıp sadece ses bırakmak.
-             const audioTrack = stream.getAudioTracks()[0];
+             const audioTrack = audioStream.getAudioTracks()[0];
+             
+             // Peer'lardaki video track'i kaldır ve ses track'ini güncelle
              peersRef.current.forEach(p => {
-                 // Basitçe eski track yerine ses track'ini "tekrar" gönder gibi davranamayız
-                 // Mesh yapısında removeTrack / addTrack daha sağlıklı ama simple-peer replaceTrack destekler.
-                 // Ekran paylaşımı bitince genellikle video track remove edilir.
                  const senders = p.peer._pc.getSenders();
                  const videoSender = senders.find(s => s.track && s.track.kind === 'video');
-                 if(videoSender) p.peer._pc.removeTrack(videoSender);
+                 if(videoSender) {
+                     // Video track'i kaldır
+                     p.peer.removeTrack(videoSender, streamRef.current);
+                 }
+                 const audioSender = senders.find(s => s.track && s.track.kind === 'audio');
+                 if(audioSender) {
+                     // Ses trackini değiştir (bazen gerekmez ama garanti olsun)
+                     audioSender.replaceTrack(audioTrack);
+                 }
              });
              
-             setStream(new MediaStream([audioTrack])); // Local update
+             // State güncelle
+             setStream(audioStream);
+             streamRef.current = audioStream;
              setScreenSharing(false);
+             
+             // Ekran paylaşımı streamini durdur
+             screenTrackRef.current?.stop();
         });
+
     } else {
+        // Ekran Paylaşımını BAŞLAT
         navigator.mediaDevices.getDisplayMedia({ cursor: true }).then(displayStream => {
-            const screenTrack = displayStream.getTracks()[0];
+            const screenTrack = displayStream.getVideoTracks()[0];
+            const audioTrack = streamRef.current.getAudioTracks()[0];
             screenTrackRef.current = screenTrack;
             
+            // Yeni bir stream oluştur (Ses + Ekran)
+            const newStream = new MediaStream([screenTrack, audioTrack]);
+
             peersRef.current.forEach(p => {
-                 p.peer.addTrack(screenTrack, stream);
+                 // Video track'i ekle
+                 p.peer.addTrack(screenTrack, newStream);
             });
 
-            // Local view update (ekranı biz de görelim)
-            // Mevcut ses + yeni ekran
-            const newStream = new MediaStream([screenTrack, stream.getAudioTracks()[0]]);
+            // Local view update
             setStream(newStream);
+            streamRef.current = newStream;
             setScreenSharing(true);
+            if(userAudioRef.current) userAudioRef.current.srcObject = newStream;
 
             screenTrack.onended = () => {
-                 toggleScreenShare(); 
+                 toggleScreenShare(); // Kullanıcı tarayıcı UI'sından durdurursa
             };
         });
     }
@@ -352,19 +368,15 @@ function App() {
   return (
     <div className="h-screen flex flex-col md:flex-row bg-gamer-bg text-gray-200 overflow-hidden">
       
-      {/* Center - Stage (Users Cards) */}
       <div className="flex-1 flex flex-col relative order-2 md:order-1">
           
-          {/* Header Info */}
           <div className="absolute top-4 left-4 z-10 flex gap-4 bg-black/50 p-2 rounded border border-gray-800 backdrop-blur text-xs text-gray-400">
              <span>ROOM: <strong className="text-white">{roomId}</strong></span>
              <span className="border-l border-gray-600 pl-4">USERS: <strong className="text-white">{peers.length + 1}</strong></span>
           </div>
 
           <div className="flex-1 p-4 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 overflow-y-auto content-start pt-16">
-              {/* Local User Card */}
               <div className={classNames("relative bg-gamer-panel rounded-lg overflow-hidden border border-gamer-cyan shadow-neon aspect-[3/2] flex flex-col", { "col-span-2 row-span-2 aspect-video": screenSharing })}>
-                  {/* Local Video/Audio */}
                   <video ref={userAudioRef} muted autoPlay playsInline className={classNames("w-full h-full object-cover", screenSharing ? "block" : "hidden")} />
                   
                   {!screenSharing && (
@@ -375,22 +387,19 @@ function App() {
                       </div>
                   )}
 
-                  <div className="absolute bottom-0 left-0 right-0 bg-black/80 p-2 flex justify-between items-center">
+                  <div className="absolute bottom-0 left-0 right-0 bg-black/80 p-2 flex justify-between items-center z-10">
                        <span className="text-gamer-cyan font-gamer text-xs">YOU</span>
                        {muted && <MicOff size={12} className="text-red-500" />}
                   </div>
               </div>
               
-              {/* Remote Users */}
               {peers.map((peer, index) => (
                   <UserCard key={index} peer={peer.peer} username={peer.username} />
               ))}
           </div>
 
-          {/* Controls Bar */}
           <div className="h-24 bg-gamer-panel border-t border-gray-800 flex items-center justify-center gap-8 z-20 pb-4">
               
-              {/* Mic Toggle */}
               <div className="flex flex-col items-center gap-1">
                   <button onClick={toggleMute} className={classNames("p-4 rounded-full transition-all duration-300 border", muted ? "bg-red-500/10 border-red-500 text-red-500" : "bg-gray-800 border-gray-700 text-white hover:border-gamer-cyan hover:shadow-neon")}>
                       {muted ? <MicOff size={24} /> : <Mic size={24} />}
@@ -398,7 +407,6 @@ function App() {
                   <span className="text-[10px] text-gray-500 font-gamer">MIC (Ctrl+M)</span>
               </div>
 
-              {/* Deafen Toggle */}
               <div className="flex flex-col items-center gap-1">
                   <button onClick={toggleDeafen} className={classNames("p-4 rounded-full transition-all duration-300 border", deafened ? "bg-red-500/10 border-red-500 text-red-500" : "bg-gray-800 border-gray-700 text-white hover:border-gamer-cyan hover:shadow-neon")}>
                       {deafened ? <VolumeX size={24} /> : <Headphones size={24} />}
@@ -406,7 +414,6 @@ function App() {
                   <span className="text-[10px] text-gray-500 font-gamer">SOUND (Ctrl+Q)</span>
               </div>
 
-              {/* Screen Share */}
               <div className="flex flex-col items-center gap-1">
                   <button onClick={toggleScreenShare} className={classNames("p-4 rounded-full transition-all duration-300 border", screenSharing ? "bg-green-500/10 border-green-500 text-green-500 shadow-[0_0_15px_rgba(0,255,0,0.4)]" : "bg-gray-800 border-gray-700 text-white hover:border-gamer-cyan hover:shadow-neon")}>
                        {screenSharing ? <MonitorOff size={24} /> : <Monitor size={24} />}
@@ -422,7 +429,6 @@ function App() {
           </div>
       </div>
 
-      {/* Right - Chat */}
       <div className="w-80 bg-gamer-panel border-l border-gray-800 flex flex-col order-1 md:order-2">
           <div className="p-4 border-b border-gray-800 font-gamer text-gray-400 flex justify-between items-center">
               <span>CHAT</span>
@@ -437,10 +443,8 @@ function App() {
                        <div className={classNames("p-3 rounded-lg max-w-[90%] text-sm break-words shadow-sm", 
                            msg.username === username ? "bg-gamer-cyan/10 border border-gamer-cyan/30 text-white rounded-tr-none" : "bg-gray-800 text-gray-300 rounded-tl-none")}>
                            
-                           {/* Text Message */}
                            {msg.type === 'text' && msg.message}
                            
-                           {/* Image Message */}
                            {msg.type === 'image' && (
                                <div className="space-y-1">
                                    <img src={msg.fileData} alt="Shared" className="max-w-full rounded border border-gray-700 max-h-40 cursor-pointer hover:opacity-90" onClick={() => window.open(msg.fileData)} />
@@ -448,7 +452,6 @@ function App() {
                                </div>
                            )}
 
-                            {/* File Message */}
                             {msg.type === 'file' && (
                                <div className="flex items-center gap-2">
                                    <Paperclip size={16} />
