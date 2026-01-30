@@ -38,7 +38,10 @@ io.on('connection', (socket) => {
     
     socket.emit('message-history', roomMessages[roomId]);
 
-    socket.to(roomId).emit('user-joined', { signal: null, callerId: socket.id, username });
+    // Orijinal kodda buradaki 'user-joined' (signal: null) yayını,
+    // WebRTC initiator mantığıyla çakışıp duplicate peer yaratıyordu.
+    // Yeni katılan kullanıcı zaten 'all-users' alıp initiator oluyor.
+    // Diğer kullanıcılar sinyal gelince 'user-joined' (line 47) tetiklenmesiyle haberdar olacak.
 
     console.log(`${username} joined room ${roomId}`);
   });
@@ -95,6 +98,10 @@ io.on('connection', (socket) => {
   });
 });
 
-server.listen(PORT, () => {
-  console.log(`Server listening on port ${PORT}`);
-});
+if (process.env.NODE_ENV !== 'test') {
+  server.listen(PORT, () => {
+    console.log(`Server listening on port ${PORT}`);
+  });
+}
+
+export { io, server, app };

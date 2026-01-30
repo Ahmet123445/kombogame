@@ -158,7 +158,9 @@ function App() {
   const joinRoom = async () => {
     if (!username || !roomId) return;
     
-    socketRef.current = io('https://kombogame-server.onrender.com');
+    // URL'i çevresel değişkenlerden al yoksa localhost kullan
+    const SOCKET_URL = import.meta.env.VITE_SERVER_URL || 'http://localhost:3000';
+    socketRef.current = io(SOCKET_URL);
 
     try {
         // 1. SESİ AL

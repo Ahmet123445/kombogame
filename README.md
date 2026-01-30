@@ -34,3 +34,12 @@ Size `http://localhost:5173` gibi bir link verecek. Bu linke tıklayarak tarayı
 - **Mikrofon:** Sesi aç/kapa.
 - **Ekran:** Ekran paylaşımını başlat/durdur.
 - **Chat:** Sağ taraftaki panelden mesajlaşın.
+
+## Testler
+
+Backend soket mantığını ve bağlantı senaryolarını test etmek için aşağıdaki komutu kullanabilirsiniz:
+
+```bash
+npm test
+```
+Bu komut `server/index.test.js` dosyasındaki testleri çalıştırır.
