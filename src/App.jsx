@@ -52,7 +52,7 @@ const UserCard = ({ peer, username, isMuted }) => {
   const [volume, setVolume] = useState(1);
   const [hasVideo, setHasVideo] = useState(false); // Siyah ekran hariç, "gerçek" video var mı?
 
-  useEffect(() => {
+      useEffect(() => {
     peer.on("stream", stream => {
       // SES
       if (audioRef.current) {
@@ -63,15 +63,19 @@ const UserCard = ({ peer, username, isMuted }) => {
       // VIDEO
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
+        // Bazen tarayıcılar video track değişince (ekran paylaşımı) videoyu durdurur
+        // Bunu zorla oynatmak gerekebilir:
+        videoRef.current.play().catch(e => console.log("Video play failed:", e));
       }
       
-      // Video track izleme (Ekran paylaşımı tespiti için)
-      // Dummy stream siyah olsa da bir videodur. 
-      // Gerçek bir ekran paylaşımı olup olmadığını anlamak için basit bir flag kullanmak zor.
-      // Ancak genellikle ekran paylaşımları 1080p gibi yüksek çözünürlükte olur, dummy 360p.
-      // Şimdilik "video varsa göster" mantığı kuralım.
       setHasVideo(stream.getVideoTracks().length > 0);
     });
+
+    // Track değişikliği (Ekran Paylaşımı) için özel dinleyici
+    // Simple-peer'da bazen 'stream' eventi tekrar tetiklenmez, 'track' eventi tetiklenir.
+    // Ancak simple-peer genellikle stream objesini günceller.
+    // Biz yine de videoRef'in güncel kaldığından emin olalım.
+    
   }, [peer]);
 
   const handleVolumeChange = (e) => {
@@ -182,12 +186,25 @@ function App() {
         // Kendi önizlememize koy
         if(userVideoRef.current) userVideoRef.current.srcObject = masterStream;
 
-        // 4. BAĞLAN
+        // 4. BAĞLAN - Önce eski dinleyicileri temizle (Safety)
+        socketRef.current.off("all-users");
+        socketRef.current.off("user-joined");
+        socketRef.current.off("receiving-returned-signal");
+        socketRef.current.off("user-left");
+        socketRef.current.off("message-history");
+        socketRef.current.off("receive-message");
+
         socketRef.current.emit("join-room", { roomId, username });
 
         socketRef.current.on("all-users", users => {
             const peersArray = [];
             users.forEach(user => {
+                // DUPLICATE CHECK: Zaten varsa ekleme!
+                const existing = peersRef.current.find(p => p.peerID === user.id);
+                if (existing) {
+                    existing.peer.destroy(); // Eskiyi yok et, yenisini kur (Clean slate)
+                }
+
                 const peer = createPeer(user.id, socketRef.current.id, masterStream, user.username);
                 peersRef.current.push({ peerID: user.id, peer, username: user.username });
                 peersArray.push({ peerID: user.id, peer, username: user.username });
@@ -196,6 +213,10 @@ function App() {
         });
 
         socketRef.current.on("user-joined", payload => {
+            // DUPLICATE CHECK: Zaten varsa ekleme!
+            const existing = peersRef.current.find(p => p.peerID === payload.callerId);
+            if(existing) return; 
+
             const peer = addPeer(payload.signal, payload.callerId, masterStream, payload.username);
             peersRef.current.push({ peerID: payload.callerId, peer, username: payload.username });
             setPeers(users => [...users, { peerID: payload.callerId, peer, username: payload.username }]);
