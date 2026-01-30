@@ -46,36 +46,37 @@ function createDummyStream() {
     return stream;
 }
 
-const UserCard = ({ peer, username, isMuted }) => {
+const UserCard = ({ peer, username, isMuted, onExpand, isExpanded }) => {
   const videoRef = useRef();
   const audioRef = useRef();
   const [volume, setVolume] = useState(1);
-  const [hasVideo, setHasVideo] = useState(false); // Siyah ekran hariç, "gerçek" video var mı?
+  const [hasVideo, setHasVideo] = useState(false);
+  const [connectionState, setConnectionState] = useState('connecting'); // connecting, connected, disconnected
 
-      useEffect(() => {
+  useEffect(() => {
     peer.on("stream", stream => {
-      // SES
+      // SES: Audio elementine bağla
       if (audioRef.current) {
         audioRef.current.srcObject = stream;
-        audioRef.current.play().catch(e => console.log("Audio play failed:", e));
+        audioRef.current.play().catch(e => console.warn("Audio auto-play blocked:", e));
       }
 
-      // VIDEO
+      // VIDEO: Video elementine bağla
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
-        // Bazen tarayıcılar video track değişince (ekran paylaşımı) videoyu durdurur
-        // Bunu zorla oynatmak gerekebilir:
-        videoRef.current.play().catch(e => console.log("Video play failed:", e));
+        videoRef.current.play().catch(e => console.warn("Video auto-play blocked:", e));
       }
       
-      setHasVideo(stream.getVideoTracks().length > 0);
+      // Video track var mı kontrol et
+      setHasVideo(stream.getVideoTracks().length > 0 && stream.getVideoTracks()[0].enabled);
+      setConnectionState('connected');
     });
 
-    // Track değişikliği (Ekran Paylaşımı) için özel dinleyici
-    // Simple-peer'da bazen 'stream' eventi tekrar tetiklenmez, 'track' eventi tetiklenir.
-    // Ancak simple-peer genellikle stream objesini günceller.
-    // Biz yine de videoRef'in güncel kaldığından emin olalım.
-    
+    // Bağlantı durumlarını dinle
+    peer.on('connect', () => setConnectionState('connected'));
+    peer.on('close', () => setConnectionState('disconnected'));
+    peer.on('error', () => setConnectionState('disconnected'));
+
   }, [peer]);
 
   const handleVolumeChange = (e) => {
@@ -85,32 +86,43 @@ const UserCard = ({ peer, username, isMuted }) => {
   };
 
   return (
-    <div className={classNames("relative bg-gamer-panel rounded-lg overflow-hidden border transition-all duration-300 group flex flex-col shadow-lg", {
-      "border-gamer-cyan shadow-neon": !isMuted,
-      "border-gray-800": isMuted,
-      "col-span-2 row-span-2 aspect-video": hasVideo, // Video varsa genişlet
-      "aspect-[3/2]": !hasVideo
-    })}>
+    <div 
+        className={classNames("relative bg-gamer-panel rounded-lg overflow-hidden border transition-all duration-300 group flex flex-col shadow-lg cursor-pointer hover:border-gamer-cyan/50", {
+        "border-gamer-cyan shadow-neon": !isMuted,
+        "border-gray-800": isMuted,
+        "fixed inset-4 z-50 aspect-auto": isExpanded, // Genişletilmiş mod
+        "aspect-[3/2]": !isExpanded && !hasVideo,
+        "col-span-2 row-span-2 aspect-video": !isExpanded && hasVideo
+      })}
+        onClick={onExpand}
+    >
       
-      <audio ref={audioRef} autoPlay playsInline style={{ display: 'none' }} />
+      <audio ref={audioRef} autoPlay playsInline />
 
-      {/* Video her zaman var (Dummy veya Gerçek). Ama css ile saklayabiliriz veya gösterebiliriz */}
+      {/* Bağlantı Durumu Göstergesi */}
+      {connectionState !== 'connected' && (
+          <div className="absolute inset-0 flex items-center justify-center bg-black/80 z-20">
+              <span className="text-gamer-cyan animate-pulse font-gamer text-xs">BAĞLANIYOR...</span>
+          </div>
+      )}
+
       <video 
         ref={videoRef} 
         playsInline 
         autoPlay 
-        muted // Yankıyı önlemek için video sesini kapa (ses audioRef'ten geliyor)
+        muted // Yankı olmaması için video sesi kapalı (ses audio'dan geliyor)
         className="w-full h-full object-cover bg-black"
       />
 
-      <div className="absolute bottom-0 left-0 right-0 bg-black/80 p-2 flex items-center justify-between backdrop-blur-sm z-10">
+      {/* Kontrol Barı (Expanded modda daha büyük) */}
+      <div className={classNames("absolute bottom-0 left-0 right-0 bg-black/80 flex items-center justify-between backdrop-blur-sm z-10", isExpanded ? "p-4" : "p-2")}>
         <div className="flex items-center gap-2 overflow-hidden">
-            <span className="text-white font-gamer text-xs tracking-wider truncate max-w-[100px]">{username}</span>
-            {isMuted && <MicOff size={12} className="text-red-500 shrink-0" />}
+            <span className={classNames("text-white font-gamer tracking-wider truncate", isExpanded ? "text-xl" : "text-xs max-w-[100px]")}>{username}</span>
+            {isMuted && <MicOff size={isExpanded ? 20 : 12} className="text-red-500 shrink-0" />}
         </div>
         
-        <div className="flex items-center gap-2 group/vol">
-            <Volume2 size={14} className="text-gray-400 group-hover/vol:text-gamer-cyan" />
+        <div className="flex items-center gap-2 group/vol" onClick={e => e.stopPropagation()}>
+            <Volume2 size={isExpanded ? 20 : 14} className="text-gray-400 group-hover/vol:text-gamer-cyan" />
             <input 
                 type="range" 
                 min="0" 
@@ -122,6 +134,13 @@ const UserCard = ({ peer, username, isMuted }) => {
             />
         </div>
       </div>
+      
+      {/* Kapat Butonu (Sadece Expanded modda) */}
+      {isExpanded && (
+          <button className="absolute top-4 right-4 text-white hover:text-red-500 bg-black/50 p-2 rounded-full z-50">
+              <MonitorOff size={24} />
+          </button>
+      )}
     </div>
   );
 };
@@ -132,7 +151,9 @@ function App() {
   const [username, setUsername] = useState("");
   const [roomId, setRoomId] = useState("Lobi");
   
-  const [peers, setPeers] = useState([]);
+  const [peers, setPeers] = useState([]); // [{ peerID, peer, username }]
+  const [expandedPeerID, setExpandedPeerID] = useState(null); // Hangi kullanıcı büyütüldü?
+
   const [messages, setMessages] = useState([]);
   const [messageInput, setMessageInput] = useState("");
   
@@ -193,33 +214,42 @@ function App() {
         socketRef.current.off("user-left");
         socketRef.current.off("message-history");
         socketRef.current.off("receive-message");
+        socketRef.current.off("user-toggled-audio"); // Temizlik
 
         socketRef.current.emit("join-room", { roomId, username });
 
         socketRef.current.on("all-users", users => {
             const peersArray = [];
             users.forEach(user => {
-                // DUPLICATE CHECK: Zaten varsa ekleme!
+                // DUPLICATE CHECK
                 const existing = peersRef.current.find(p => p.peerID === user.id);
                 if (existing) {
-                    existing.peer.destroy(); // Eskiyi yok et, yenisini kur (Clean slate)
+                    existing.peer.destroy(); 
                 }
 
                 const peer = createPeer(user.id, socketRef.current.id, masterStream, user.username);
-                peersRef.current.push({ peerID: user.id, peer, username: user.username });
-                peersArray.push({ peerID: user.id, peer, username: user.username });
+                // isMuted bilgisini de sakla
+                const peerObj = { peerID: user.id, peer, username: user.username, isMuted: user.isMuted };
+                peersRef.current.push(peerObj);
+                peersArray.push(peerObj);
             });
             setPeers(peersArray);
         });
 
         socketRef.current.on("user-joined", payload => {
-            // DUPLICATE CHECK: Zaten varsa ekleme!
             const existing = peersRef.current.find(p => p.peerID === payload.callerId);
             if(existing) return; 
 
             const peer = addPeer(payload.signal, payload.callerId, masterStream, payload.username);
-            peersRef.current.push({ peerID: payload.callerId, peer, username: payload.username });
-            setPeers(users => [...users, { peerID: payload.callerId, peer, username: payload.username }]);
+            const peerObj = { peerID: payload.callerId, peer, username: payload.username, isMuted: false };
+            peersRef.current.push(peerObj);
+            setPeers(users => [...users, peerObj]);
+        });
+
+        // Ses açma/kapama olayını dinle
+        socketRef.current.on("user-toggled-audio", ({ userId, isMuted }) => {
+            peersRef.current = peersRef.current.map(p => p.peerID === userId ? { ...p, isMuted } : p);
+            setPeers(prev => prev.map(p => p.peerID === userId ? { ...p, isMuted } : p));
         });
 
         socketRef.current.on("receiving-returned-signal", payload => {
@@ -425,8 +455,19 @@ function App() {
              <span className="border-l border-gray-600 pl-4">USERS: <strong className="text-white">{peers.length + 1}</strong></span>
           </div>
 
+          {/* Genişletilmiş Görünüm Arka Planı (Overlay) */}
+          {expandedPeerID && (
+              <div 
+                className="fixed inset-0 bg-black/80 z-40 backdrop-blur-sm flex items-center justify-center p-8"
+                onClick={() => setExpandedPeerID(null)} // Boşluğa tıklayınca kapat
+              >
+                 {/* Kartın kendisi zaten 'fixed' oluyor UserCard içinde, burası sadece arka planı karartmak için */}
+              </div>
+          )}
+
           <div className="flex-1 p-4 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 overflow-y-auto content-start pt-16">
               
+              {/* LOCAL USER */}
               <div className={classNames("relative bg-gamer-panel rounded-lg overflow-hidden border border-gamer-cyan shadow-neon aspect-[3/2] flex flex-col", { "col-span-2 row-span-2 aspect-video": screenSharing })}>
                   
                   {/* Local Video/Ekran */}
@@ -446,8 +487,16 @@ function App() {
                   </div>
               </div>
               
+              {/* REMOTE USERS */}
               {peers.map((peer, index) => (
-                  <UserCard key={index} peer={peer.peer} username={peer.username} />
+                  <UserCard 
+                    key={peer.peerID} 
+                    peer={peer.peer} 
+                    username={peer.username}
+                    isMuted={peer.isMuted} // Mute durumu eklendi
+                    isExpanded={expandedPeerID === peer.peerID}
+                    onExpand={() => setExpandedPeerID(expandedPeerID === peer.peerID ? null : peer.peerID)}
+                  />
               ))}
           </div>
 
