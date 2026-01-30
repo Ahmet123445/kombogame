@@ -158,8 +158,12 @@ function App() {
   const joinRoom = async () => {
     if (!username || !roomId) return;
     
-    // URL'i çevresel değişkenlerden al yoksa localhost kullan
-    const SOCKET_URL = import.meta.env.VITE_SERVER_URL || 'http://localhost:3000';
+    // URL Belirleme Mantığı:
+    // 1. Önce .env dosyasında VITE_SERVER_URL var mı diye bakar.
+    // 2. Yoksa ve uygulama "Production" (Canlı) modundaysa, Render adresini kullanır.
+    // 3. Hiçbiri değilse (Geliştirme modu), localhost kullanır.
+    const SOCKET_URL = import.meta.env.VITE_SERVER_URL || (import.meta.env.PROD ? 'https://kombogame-server.onrender.com' : 'http://localhost:3000');
+    
     socketRef.current = io(SOCKET_URL);
 
     try {
